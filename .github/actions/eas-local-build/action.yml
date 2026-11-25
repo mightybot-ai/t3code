@@ -18,7 +18,7 @@ inputs:
     description: Path the build artifact is written to
     required: true
   cache:
-    description: "false for untrusted code: no sticky disk and no EAS cache, so nothing it writes reaches trusted builds"
+    description: "false for untrusted code: no build cache and no EAS cache, so nothing it writes reaches trusted builds"
     default: "true"
   sourcemaps-r2:
     description: R2 credentials for the eas-build-on-success source map upload; EAS secrets don't reach local builds
@@ -50,12 +50,22 @@ runs:
           echo "CMAKE_CXX_COMPILER_LAUNCHER=ccache"
         } >> "$GITHUB_ENV"
 
-    - name: Mount Android build cache
+    - name: Cache Android build dependencies
       if: inputs.platform == 'android' && inputs.cache == 'true'
-      uses: useblacksmith/stickydisk@3f6be1451e3cad893b778bc93495c80452a5da26 # v1.7.2
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
-        key: ${{ github.repository }}-android-${{ inputs.environment == 'production' && 'store' || 'preview' }}-build
-        path: ~/.cache/t3-android-${{ inputs.environment == 'production' && 'store' || 'preview' }}
+        key: android-build-v1-${{ runner.os }}-${{ runner.arch }}-${{ inputs.environment }}-${{ inputs.profile }}-${{ hashFiles('pnpm-lock.yaml') }}-${{ github.run_id }}-${{ github.run_attempt }}
+        restore-keys: |
+          android-build-v1-${{ runner.os }}-${{ runner.arch }}-${{ inputs.environment }}-${{ inputs.profile }}-${{ hashFiles('pnpm-lock.yaml') }}-
+          android-build-v1-${{ runner.os }}-${{ runner.arch }}-${{ inputs.environment }}-${{ inputs.profile }}-
+        path: |
+          ${{ env.GRADLE_USER_HOME }}/caches
+          ${{ env.GRADLE_USER_HOME }}/wrapper
+          ${{ env.CCACHE_DIR }}
+          ${{ env.pnpm_config_store_dir }}
+
+    - uses: ./.github/actions/setup-apt-mirrors
+      if: inputs.platform == 'android' && inputs.cache == 'true'
 
     - name: Configure Gradle and ccache
       if: inputs.platform == 'android' && inputs.cache == 'true'
@@ -63,9 +73,9 @@ runs:
       run: |
         mkdir -p "$GRADLE_USER_HOME" "$CCACHE_DIR"
         rm -rf "$EAS_LOCAL_BUILD_WORKINGDIR"
-        # No daemon: nothing should hold the sticky disk open when it is committed.
+        # Finish cache writes before the cache action saves them.
         printf 'org.gradle.caching=true\norg.gradle.daemon=false\n' > "$GRADLE_USER_HOME/gradle.properties"
-        sudo sed -i 's|http://|https://|g' /etc/apt/blacksmith-ubuntu-mirrors.txt /etc/apt/sources.list.d/ubuntu.sources
+        sudo sed -i 's|http://|https://|g' /etc/apt/ci-ubuntu-mirrors.txt /etc/apt/sources.list.d/ubuntu.sources
         sudo apt-get update -qq && sudo apt-get install -y -qq ccache
         ccache --zero-stats
 
